@@ -1,9 +1,10 @@
 using Microsoft.AspNetCore.SignalR;
 using System.Collections.Concurrent;
+using chat_server.Contracts;
 
 namespace chat_server.Hubs;
 
-public class ChatHub : Hub
+public class ChatHub : Hub<IChatClient>
 {
     // Lưu trữ thông tin người dùng đang kết nối
     private static readonly ConcurrentDictionary<string, UserInfo> ConnectedUsers = new();
@@ -23,8 +24,8 @@ public class ChatHub : Hub
         // Join room
         await Groups.AddToGroupAsync(Context.ConnectionId, userInfo.Room);
 
-        // Thông báo người dùng mới join
-        await Clients.Group(userInfo.Room).SendAsync("UserJoined", username, userInfo.Room);
+        // Thông báo người dùng mới join với type-safe method
+        await Clients.Group(userInfo.Room).UserJoined(username, userInfo.Room);
 
         // Gửi danh sách users hiện tại trong room
         var usersInRoom = ConnectedUsers.Values
@@ -32,7 +33,7 @@ public class ChatHub : Hub
             .Select(u => u.Username)
             .ToList();
 
-        await Clients.Caller.SendAsync("UsersInRoom", usersInRoom);
+        await Clients.Group(userInfo.Room).UsersInRoom(usersInRoom);
 
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User '{username}' joined room '{userInfo.Room}'");
     }
@@ -41,7 +42,7 @@ public class ChatHub : Hub
     {
         if (ConnectedUsers.TryGetValue(Context.ConnectionId, out var userInfo))
         {
-            var messageData = new
+            var messageData = new MessageData
             {
                 Username = userInfo.Username,
                 Message = message,
@@ -49,7 +50,7 @@ public class ChatHub : Hub
                 Room = userInfo.Room
             };
 
-            await Clients.Group(userInfo.Room).SendAsync("ReceiveMessage", messageData);
+            await Clients.Group(userInfo.Room).ReceiveMessage(messageData);
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {userInfo.Username} in {userInfo.Room}: {message}");
         }
     }
@@ -60,12 +61,19 @@ public class ChatHub : Hub
         {
             // Leave current room
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, userInfo.Room);
-            await Clients.Group(userInfo.Room).SendAsync("UserLeft", userInfo.Username, userInfo.Room);
+            await Clients.Group(userInfo.Room).UserLeft(userInfo.Username, userInfo.Room);
+
+            // Gửi danh sách users updated cho room cũ
+            var usersInOldRoom = ConnectedUsers.Values
+                .Where(u => u.Room == userInfo.Room && u.ConnectionId != Context.ConnectionId)
+                .Select(u => u.Username)
+                .ToList();
+            await Clients.Group(userInfo.Room).UsersInRoom(usersInOldRoom);
 
             // Join new room
             userInfo.Room = roomName;
             await Groups.AddToGroupAsync(Context.ConnectionId, roomName);
-            await Clients.Group(roomName).SendAsync("UserJoined", userInfo.Username, roomName);
+            await Clients.Group(roomName).UserJoined(userInfo.Username, roomName);
 
             // Send updated user list
             var usersInRoom = ConnectedUsers.Values
@@ -73,7 +81,7 @@ public class ChatHub : Hub
                 .Select(u => u.Username)
                 .ToList();
 
-            await Clients.Group(roomName).SendAsync("UsersInRoom", usersInRoom);
+            await Clients.Group(roomName).UsersInRoom(usersInRoom);
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User '{userInfo.Username}' moved to room '{roomName}'");
         }
     }
@@ -86,7 +94,7 @@ public class ChatHub : Hub
 
             if (targetUser != null)
             {
-                var messageData = new
+                var messageData = new PrivateMessageData
                 {
                     From = senderInfo.Username,
                     Message = message,
@@ -94,14 +102,14 @@ public class ChatHub : Hub
                     IsPrivate = true
                 };
 
-                await Clients.Client(targetUser.ConnectionId).SendAsync("ReceivePrivateMessage", messageData);
-                await Clients.Caller.SendAsync("PrivateMessageSent", targetUsername, message);
+                await Clients.Client(targetUser.ConnectionId).ReceivePrivateMessage(messageData);
+                await Clients.Caller.PrivateMessageSent(targetUsername, message);
 
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Private message from {senderInfo.Username} to {targetUsername}: {message}");
             }
             else
             {
-                await Clients.Caller.SendAsync("Error", $"User '{targetUsername}' not found");
+                await Clients.Caller.Error($"User '{targetUsername}' not found");
             }
         }
     }
@@ -116,7 +124,7 @@ public class ChatHub : Hub
     {
         if (ConnectedUsers.TryRemove(Context.ConnectionId, out var userInfo))
         {
-            await Clients.Group(userInfo.Room).SendAsync("UserLeft", userInfo.Username, userInfo.Room);
+            await Clients.Group(userInfo.Room).UserLeft(userInfo.Username, userInfo.Room);
 
             // Send updated user list
             var usersInRoom = ConnectedUsers.Values
@@ -124,7 +132,7 @@ public class ChatHub : Hub
                 .Select(u => u.Username)
                 .ToList();
 
-            await Clients.Group(userInfo.Room).SendAsync("UsersInRoom", usersInRoom);
+            await Clients.Group(userInfo.Room).UsersInRoom(usersInRoom);
 
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User '{userInfo.Username}' disconnected from room '{userInfo.Room}'");
 

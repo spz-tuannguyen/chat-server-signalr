@@ -13,6 +13,9 @@ var signalROptions = builder.Configuration.GetSection(SignalROptions.SectionName
 builder.Services.Configure<ChatServerOptions>(builder.Configuration.GetSection(ChatServerOptions.SectionName));
 builder.Services.Configure<SignalROptions>(builder.Configuration.GetSection(SignalROptions.SectionName));
 
+// Thêm controllers để serve API documentation
+builder.Services.AddControllers();
+
 // Thêm SignalR services với cấu hình từ appsettings
 builder.Services.AddSignalR(options =>
 {
@@ -49,11 +52,19 @@ var app = builder.Build();
 // Sử dụng CORS
 app.UseCors("AllowAll");
 
+// Serve static files từ wwwroot
+app.UseStaticFiles();
+
 // Sử dụng middleware rate limiting
 app.UseMiddleware<RateLimitingMiddleware>(60); // 60 requests per minute
 
 // Map SignalR hub
 app.MapHub<ChatHub>("/chatHub");
+
+// Map controllers để serve API documentation
+app.MapControllers();
+
+app.Urls.Add("http://0.0.0.0:5000");
 
 // Endpoint để kiểm tra server status
 app.MapGet("/", () => new
@@ -61,6 +72,11 @@ app.MapGet("/", () => new
     Status = "Chat Server is running",
     Timestamp = DateTime.UtcNow,
     SignalRHub = "/chatHub",
+    Documentation = new
+    {
+        JSON = "/api/apidocs/signalr",
+        Constants = "/api/apidocs/signalr/constants"
+    },
     Configuration = new
     {
         MaxConnections = chatServerOptions.MaxConcurrentConnections,
